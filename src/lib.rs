@@ -1,38 +1,50 @@
-//use std;
+#[macro_use] extern crate etrace;
+use etrace::Error;
+
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum State {
-	Waiting, Ready, Canceled
+	Waiting, Ready, Consumed, Canceled
 }
 
 #[derive(Clone)]
 pub struct Void;
 
-/// A future
-pub struct Future<T: 'static, U: 'static + Clone> {
+
+
+/// The futures inner state
+struct Inner<T, U> {
 	payload: std::sync::Mutex<(State, Option<T>)>,
 	cond_var: std::sync::Condvar,
-	shared_state: std::sync::Mutex<U>
+	shared_state: std::sync::Mutex<U>,
+	cancel_on_drop: std::sync::atomic::AtomicBool
 }
-impl<T: 'static, U: 'static + Clone> Future<T, U> {
-	/// Creates an empty `Future<T>`
-	pub fn new(initial_shared_state: U) -> Future<T, U> {
-		Future {
+unsafe impl<T, U> Sync for Inner<T, U> {}
+
+
+
+pub struct Future<T, U>(std::sync::Arc<Inner<T, U>>);
+impl<T, U> Future<T, U> {
+	/// Creates a new `Future<T, U>` with `shared_state` as shared-state
+	pub fn new(shared_state: U) -> Self {
+		Future(std::sync::Arc::new(Inner {
 			payload: std::sync::Mutex::new((State::Waiting, None)),
 			cond_var: std::sync::Condvar::new(),
-			shared_state: std::sync::Mutex::new(initial_shared_state)
-		}
+			shared_state: std::sync::Mutex::new(shared_state),
+			cancel_on_drop: std::sync::atomic::AtomicBool::new(true)
+		}))
 	}
 	
-	/// Puts a result into the future
-	pub fn set(&self, result: T) -> Result<(), State> {
+	/// Sets the future
+	pub fn set(&self, result: T) -> Result<(), Error<State>> {
 		// Check if the future can be set (is `State::Waiting`)
-		let mut payload = self.payload.lock().expect("Failed to lock mutex");
-		if payload.0 != State::Waiting { return Err(payload.0) }
+		let mut payload = self.0.payload.lock().unwrap();
+		if payload.0 != State::Waiting { throw_err!(payload.0) }
 		
 		// Set result
 		*payload = (State::Ready, Some(result));
-		self.cond_var.notify_all();
+		self.0.cond_var.notify_all();
 		Ok(())
 	}
 	
@@ -40,13 +52,17 @@ impl<T: 'static, U: 'static + Clone> Future<T, U> {
 	///
 	/// This is useful to indicate that the future is obsolete and should not be `set` anymore
 	pub fn cancel(&self) {
-		self.payload.lock().expect("Failed to lock mutex").0 = State::Canceled;
-		self.cond_var.notify_all();
+		let mut payload = self.0.payload.lock().unwrap();
+		// Check if the payload is still cancelable
+		if payload.0 == State::Waiting {
+			payload.0 = State::Canceled;
+			self.0.cond_var.notify_all();
+		}
 	}
 	
-	/// Returns the state of the future
+	/// Returns the future's state
 	pub fn get_state(&self) -> State {
-		self.payload.lock().expect("Failed to lock mutex").0
+		self.0.payload.lock().unwrap().0
 	}
 	
 	/// Checks if the future is still waiting or has been set/canceled
@@ -58,71 +74,97 @@ impl<T: 'static, U: 'static + Clone> Future<T, U> {
 	///
 	/// If the future is ready, it is consumed and `T` is returned;
 	/// if the future is not ready, `Error::InvalidState(State)` is returned
-	pub fn try_get(&self) -> Result<T, State> {
+	pub fn try_get(&self) -> Result<T, Error<State>> {
 		// Lock this future and check if it has a result (is `State::Ready`)
-		let mut payload = self.payload.lock().expect("Failed to lock mutex");
-		if payload.0 != State::Ready { Err(payload.0) }
-			else { Ok(payload.1.take().expect("Failed to extract payload")) }
+		let payload = self.0.payload.lock().unwrap();
+		Ok(try_rethrow_err!(Future::<T, U>::extract_payload(payload)))
 	}
 	
 	/// Tries to get the future's result
 	///
 	/// If the future is ready or or becomes ready before the timeout occurres, it is consumed
 	/// and `T` is returned; if the future is not ready, `Error::InvalidState(State)` is returned
-	pub fn try_get_timeout(&self, timeout: std::time::Duration) -> Result<T, State> {
-		let start = std::time::Instant::now();
+	pub fn try_get_timeout(&self, timeout: std::time::Duration) -> Result<T, Error<State>> {
+		let timeout_point = std::time::Instant::now() + timeout;
 		
 		// Wait for condvar until the state is not `State::Waiting` anymore or the timeout has occurred
-		let mut payload = self.payload.lock().expect("Failed to lock mutex");
-		while payload.0 == State::Waiting && start.elapsed() < timeout {
-			payload = self.cond_var.wait_timeout(payload, time_remaining(start, timeout)).expect("Failed to lock mutex").0;
+		let mut payload = self.0.payload.lock().unwrap();
+		while payload.0 == State::Waiting && std::time::Instant::now() < timeout_point {
+			payload = self.0.cond_var.wait_timeout(payload, time_remaining(timeout_point)).unwrap().0;
 		}
-		
-		// Check if the future has a result (is `State::Ready`)
-		if payload.0 != State::Ready { Err(payload.0) }
-			else { Ok(payload.1.take().expect("Failed to extract result")) }
+		Ok(try_rethrow_err!(Future::<T, U>::extract_payload(payload)))
 	}
 	
 	/// Gets the future's result
 	///
 	/// __Warning: this function will block until a result becomes available__
-	pub fn get(&self) -> Result<T, State> {
+	pub fn get(&self) -> Result<T, Error<State>> {
 		// Wait for condvar until the state is not `State::Waiting` anymore
-		let mut payload = self.payload.lock().expect("Failed to lock mutex");
-		while payload.0 == State::Waiting { payload = self.cond_var.wait(payload).expect("Failed to lock mutex") }
+		let mut payload = self.0.payload.lock().unwrap();
+		while payload.0 == State::Waiting { payload = self.0.cond_var.wait(payload).unwrap() }
 		
-		// Check if the future has a result (is `State::Ready`)
-		if payload.0 != State::Ready { Err(payload.0) }
-			else { Ok(payload.1.take().expect("Failed to extract result")) }
+		Ok(try_rethrow_err!(Future::<T, U>::extract_payload(payload)))
 	}
 	
 	/// Get a clone of the current shared state
-	pub fn get_shared_state(&self) -> U {
-		self.shared_state.lock().expect("Failed to lock mutex").clone()
+	pub fn get_shared_state(&self) -> U where U: Clone {
+		self.0.shared_state.lock().unwrap().clone()
 	}
 	
 	/// Replace the current shared state
 	pub fn set_shared_state(&self, shared_state: U) {
-		*self.shared_state.lock().expect("Failed to lock mutex") = shared_state
+		*self.0.shared_state.lock().unwrap() = shared_state
 	}
 	
 	/// Provides exclusive access to the shared state for `modifier` until this function returns
 	///
 	/// The return value of `modifier` will become the new shared state
 	pub fn access_shared_state<V>(&self, modifier: &Fn(&mut U, V), parameter: V) {
-		let mut shared_state_lock = self.shared_state.lock().expect("Failed to lock mutex");
+		let mut shared_state_lock = self.0.shared_state.lock().unwrap();
 		modifier(&mut *shared_state_lock, parameter);
 	}
+	
+	/// Detaches the future so it won't be canceled if there is only one instance left
+	///
+	/// Useful if you either don't want that your future is ever canceled or if there's always only
+	/// one instance (e.g. if you wrap it into a reference-counting container)
+	pub fn detach(&self) {
+		self.0.cancel_on_drop.store(false, std::sync::atomic::Ordering::Relaxed)
+	}
+	
+	
+	
+	/// Internal helper to validate/update the future's state and get the payload
+	fn extract_payload(mut payload: std::sync::MutexGuard<(State, Option<T>)>) -> Result<T, Error<State>> {
+		// Validate state
+		if payload.0 == State::Ready {
+			// Update state and return the payload
+			payload.0 = State::Consumed;
+			// If the payload cannot be taken, we'll fall to `throw_err!(payload.0)` where `payload.0 == State::Consumed`
+			if let Some(payload) = payload.1.take() { return Ok(payload) }
+		}
+		throw_err!(payload.0)
+	}
 }
-unsafe impl<T, U: Clone> Send for Future<T, U> {}
-unsafe impl<T, U: Clone> Sync for Future<T, U> {}
+impl<T, U> Drop for Future<T, U> {
+	fn drop(&mut self) {
+		if std::sync::Arc::strong_count(&self.0) <= 2 && self.0.cancel_on_drop.load(std::sync::atomic::Ordering::Relaxed) { self.cancel() }
+	}
+}
+impl<T, U> Clone for Future<T, U> {
+	fn clone(&self) -> Self {
+		Future(self.0.clone())
+	}
+}
+unsafe impl<T, U> Send for Future<T, U> {}
+unsafe impl<T, U> Sync for Future<T, U> {}
 
 
 
 /// Computes the remaining time underflow-safe
-fn time_remaining(start: std::time::Instant, timeout: std::time::Duration) -> std::time::Duration {
-	let elapsed = start.elapsed();
-	if elapsed < timeout { timeout - elapsed } else { std::time::Duration::default() }
+pub fn time_remaining(timeout_point: std::time::Instant) -> std::time::Duration {
+	let now = std::time::Instant::now();
+	if now > timeout_point { std::time::Duration::default() } else { timeout_point - now }
 }
 
 
@@ -130,13 +172,13 @@ fn time_remaining(start: std::time::Instant, timeout: std::time::Duration) -> st
 /// Creates a future for `job` and runs `job`. The result of `job` will be set as result into the future.
 /// The parameter passed to `job` is a function that returns if the future is still waiting
 /// so that `job` can check for cancellation.
-pub fn run_job<T: 'static, U: 'static + Clone, F: FnOnce(&Future<T, U>) + Send + 'static>(job: F, initial_shared_state: U) -> std::sync::Arc<Future<T, U>> {
-	// Create future
-	let future = std::sync::Arc::new(Future::new(initial_shared_state));
+pub fn run_job<T: 'static, U: 'static, F: FnOnce(Future<T, U>) + Send + 'static>(job: F, shared_state: U) -> Future<T, U> {
+	use std::clone::Clone;
 	
-	// Spawn job
+	// Create future and spawn job
+	let future = Future::new(shared_state);
 	let _future = future.clone();
-	std::thread::spawn(move || job(&_future));
+	std::thread::spawn(move || job(_future));
 	
 	future
 }
@@ -162,117 +204,57 @@ macro_rules! job_die {
 #[cfg(test)]
 mod test {
 	use std;
+	use super::{ Future, State, run_job, Void };
 	
-	#[test] #[should_panic]
-	fn double_set_panic() {
-		let future = std::sync::Arc::new(super::Future::<u8, super::Void>::new(super::Void));
-		let _future = future.clone();
-		
-		std::thread::spawn(move || {
-			future.set(7).expect("Failed to set future");
-			future.set(77).expect("Failed to set future");
-		}).join().expect("Failed to join thread");
-	}
-	
-	#[test] #[should_panic]
-	fn cancel_set_panic() {
-		let future = std::sync::Arc::new(super::Future::<u8, super::Void>::new(super::Void));
-		let _future = future.clone();
-		
-		future.cancel();
-		std::thread::spawn(move || _future.set(7).expect("Failed to set future")).join().expect("Failed to join thread");
-	}
-	
-	#[test] #[should_panic(expected = "Failed to get future: Canceled")]
-	fn cancel_get_panic() {
-		let future = std::sync::Arc::new(super::Future::<u8, super::Void>::new(super::Void));
-		let _future = future.clone();
-		
-		std::thread::spawn(move || {
-			std::thread::sleep(std::time::Duration::from_secs(3));
-			_future.cancel()
-		});
-		future.get().expect("Failed to get future");
+	#[test]
+	fn double_set_err() {
+		let fut = Future::<u8, Void>::new(Void);
+		fut.set(7).unwrap();
+		assert_eq!(fut.set(77).unwrap_err().kind, State::Ready)
 	}
 	
 	#[test]
-	fn is_ready() {
-		let future = std::sync::Arc::new(super::Future::<u8, super::Void>::new(super::Void));
-		let _future = future.clone();
-		
-		assert_eq!(future.get_state(), super::State::Waiting);
-		
-		std::thread::spawn(move || _future.set(7).expect("Failed to set future")).join().expect("Failed to join thread");
-		assert_eq!(future.get_state(), super::State::Ready);
+	fn cancel_set_err() {
+		let fut = Future::<u8, Void>::new(Void);
+		fut.cancel();
+		assert_eq!(fut.set(7).unwrap_err().kind, State::Canceled)
 	}
 	
 	#[test]
-	fn get() {
-		let future = std::sync::Arc::new(super::Future::<u8, super::Void>::new(super::Void));
-		let _future = future.clone();
-		
-		std::thread::spawn(move || {
-			std::thread::sleep(std::time::Duration::from_secs(3));
-			_future.set(7).expect("Failed to set future");
-		});
-		assert_eq!(future.get().expect("Failed to get future"), 7)
-	}
-	
-	#[test]
-	fn try_get() {
-		let future = std::sync::Arc::new(super::Future::<u8, super::Void>::new(super::Void));
-		let _future = future.clone();
-		
-		assert_eq!(future.try_get().expect_err("Failed to get error"), super::State::Waiting);
-		
-		std::thread::spawn(move || _future.set(7).expect("Failed to set future")).join().expect("Failed to join thread");
-		assert_eq!(future.try_get().expect("Failed to get future"), 7);
-	}
-	
-	#[test]
-	fn try_get_timeout() {
-		let future = std::sync::Arc::new(super::Future::<u8, super::Void>::new(super::Void));
-		let _future = future.clone();
-		
-		assert_eq!(future.try_get_timeout(std::time::Duration::from_secs(3)).expect_err("Failed to get error"), super::State::Waiting);
-		
-		std::thread::spawn(move || {
+	fn drop_is_canceled() {
+		let fut = Future::<u8, Void>::new(Void);
+		assert_eq!(fut.get_state(), State::Waiting);
+		{
+			let _fut = fut.clone();
 			std::thread::sleep(std::time::Duration::from_secs(2));
-			_future.set(7).expect("Failed to set future")
-		});
-		assert_eq!(future.try_get_timeout(std::time::Duration::from_secs(5)).expect("Failed to get future"), 7);
+		}
+		assert_eq!(fut.get_state(), State::Canceled)
 	}
 	
 	#[test]
-	fn test_job() {
-		let future = super::run_job(|future: &super::Future<u8, super::Void>| {
+	fn cancel_get_err() {
+		let fut = run_job(|fut: Future<u8, Void>| {
 			std::thread::sleep(std::time::Duration::from_secs(4));
-			job_return!(future, 7);
-		}, super::Void);
-		
-		assert_eq!(future.try_get_timeout(std::time::Duration::from_secs(7)).expect("Failed to get future"), 7);
+			job_die!(fut)
+		}, Void);
+		assert_eq!(fut.get().unwrap_err().kind, State::Canceled)
 	}
 	
 	#[test]
-	fn test_job_cancellation() {
-		let control_flag = std::sync::Arc::new(std::sync::Mutex::new(false));
+	fn is_ready_and_get() {
+		let fut = run_job(|fut: Future<u8, Void>| {
+			std::thread::sleep(std::time::Duration::from_secs(4));
+			fut.set(7).unwrap();
+		}, Void);
+		assert_eq!(fut.get_state(), State::Waiting);
 		
-		let _control_flag = control_flag.clone();
-		let future = super::run_job(move |future: &super::Future<(), super::Void>| {
-			std::thread::sleep(std::time::Duration::from_secs(2));
-			if !future.is_waiting() { job_die!(future) }
-			
+		// Create and drop future
+		{
+			let _fut = fut.clone();
 			std::thread::sleep(std::time::Duration::from_secs(7));
-			if future.is_waiting() { job_die!(future) }
-			
-			*_control_flag.lock().expect("Failed to lock mutex") = true;
-			job_die!(future)
-		}, super::Void);
+			assert_eq!(_fut.get_state(), State::Ready);
+		}
 		
-		std::thread::sleep(std::time::Duration::from_secs(4));
-		future.cancel();
-		
-		std::thread::sleep(std::time::Duration::from_secs(7));
-		assert_eq!(*control_flag.lock().expect("Failed to lock mutex"), true);
+		assert_eq!(fut.get().unwrap(), 7);
 	}
 }
