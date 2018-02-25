@@ -109,9 +109,9 @@ impl<T: 'static, U: 'static + Clone> Future<T, U> {
 	/// Provides exclusive access to the shared state for `modifier` until this function returns
 	///
 	/// The return value of `modifier` will become the new shared state
-	pub fn access_shared_state<V>(&self, modifier: &Fn(U, V) -> U, parameter: V) {
+	pub fn access_shared_state<V>(&self, modifier: &Fn(&mut U, V), parameter: V) {
 		let mut shared_state_lock = self.shared_state.lock().expect("Failed to lock mutex");
-		*shared_state_lock = modifier(*shared_state_lock, parameter);
+		modifier(&mut *shared_state_lock, parameter);
 	}
 }
 unsafe impl<T, U: Clone> Send for Future<T, U> {}
