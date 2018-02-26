@@ -77,7 +77,7 @@ impl<T, U> Future<T, U> {
 	pub fn try_get(&self) -> Result<T, Error<State>> {
 		// Lock this future and check if it has a result (is `State::Ready`)
 		let payload = self.0.payload.lock().unwrap();
-		Ok(try_rethrow_err!(Future::<T, U>::extract_payload(payload)))
+		Ok(try_err!(Future::<T, U>::extract_payload(payload)))
 	}
 	
 	/// Tries to get the future's result
@@ -92,7 +92,7 @@ impl<T, U> Future<T, U> {
 		while payload.0 == State::Waiting && std::time::Instant::now() < timeout_point {
 			payload = self.0.cond_var.wait_timeout(payload, time_remaining(timeout_point)).unwrap().0;
 		}
-		Ok(try_rethrow_err!(Future::<T, U>::extract_payload(payload)))
+		Ok(try_err!(Future::<T, U>::extract_payload(payload)))
 	}
 	
 	/// Gets the future's result
@@ -103,7 +103,7 @@ impl<T, U> Future<T, U> {
 		let mut payload = self.0.payload.lock().unwrap();
 		while payload.0 == State::Waiting { payload = self.0.cond_var.wait(payload).unwrap() }
 		
-		Ok(try_rethrow_err!(Future::<T, U>::extract_payload(payload)))
+		Ok(try_err!(Future::<T, U>::extract_payload(payload)))
 	}
 	
 	/// Get a clone of the current shared state
