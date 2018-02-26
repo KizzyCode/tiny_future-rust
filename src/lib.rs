@@ -183,6 +183,7 @@ pub fn run_job<T: 'static, U: 'static, F: FnOnce(Future<T, U>) + Send + 'static>
 	future
 }
 
+/// Sets `$result` as the `$future`'s result and returns
 #[macro_export]
 macro_rules! job_return {
     ($future:expr, $result:expr) => ({
@@ -191,6 +192,7 @@ macro_rules! job_return {
 	})
 }
 
+/// Cancels `$future` and returns
 #[macro_export]
 macro_rules! job_die {
     ($future:expr) => ({
