@@ -117,13 +117,13 @@ impl<T, U> Future<T, U> {
 	}
 	
 	/// Provides exclusive access to the shared state within `modifier` until `modifier` returns
-	pub fn access_shared_state(&self, modifier: &Fn(&mut U)) {
+	pub fn access_shared_state(&self, modifier: &mut FnMut(&mut U)) {
 		let mut shared_state_lock = self.0.shared_state.lock().unwrap();
 		modifier(&mut *shared_state_lock);
 	}
 	
 	/// Provides exclusive access to the shared state within `modifier` until `modifier` returns
-	pub fn access_shared_state_param<V>(&self, modifier: &Fn(&mut U, V), parameter: V) {
+	pub fn access_shared_state_param<V>(&self, modifier: &mut FnMut(&mut U, V), parameter: V) {
 		let mut shared_state_lock = self.0.shared_state.lock().unwrap();
 		modifier(&mut *shared_state_lock, parameter);
 	}
