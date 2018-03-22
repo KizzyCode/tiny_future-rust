@@ -8,9 +8,6 @@ pub enum State {
 	Waiting, Ready, Consumed, Canceled
 }
 
-#[derive(Clone)]
-pub struct Void;
-
 
 
 /// The futures inner state
@@ -24,10 +21,10 @@ unsafe impl<T, U> Sync for Inner<T, U> {}
 
 
 
-pub struct Future<T, U>(std::sync::Arc<Inner<T, U>>);
+pub struct Future<T, U = ()>(std::sync::Arc<Inner<T, U>>);
 impl<T, U> Future<T, U> {
 	/// Creates a new `Future<T, U>` with `shared_state` as shared-state
-	pub fn new(shared_state: U) -> Self {
+	pub fn with_state(shared_state: U) -> Self {
 		Future(std::sync::Arc::new(Inner {
 			payload: std::sync::Mutex::new((State::Waiting, None)),
 			cond_var: std::sync::Condvar::new(),
@@ -150,6 +147,16 @@ impl<T, U> Future<T, U> {
 		throw_err!(payload.0)
 	}
 }
+impl<T> Future<T, ()> {
+	pub fn new() -> Self {
+		Future::with_state(())
+	}
+}
+impl<T, U> Default for Future<T, U> where U: Default {
+	fn default() -> Self {
+		Future::with_state(U::default())
+	}
+}
 impl<T, U> Drop for Future<T, U> {
 	fn drop(&mut self) {
 		if std::sync::Arc::strong_count(&self.0) <= 2 && self.0.cancel_on_drop.load(std::sync::atomic::Ordering::Relaxed) { self.cancel() }
@@ -173,19 +180,28 @@ pub fn time_remaining(timeout_point: std::time::Instant) -> std::time::Duration 
 
 
 
-/// Creates a future for `job` and runs `job`. The result of `job` will be set as result into the future.
-/// The parameter passed to `job` is a function that returns if the future is still waiting
+/// Creates a future for `job` and runs `job`. The result of `job` will be set as result into the
+/// future. The parameter passed to `job` is a function that returns if the future is still waiting
 /// so that `job` can check for cancellation.
-pub fn run_job<T: 'static, U: 'static, F: FnOnce(Future<T, U>) + Send + 'static>(job: F, shared_state: U) -> Future<T, U> {
+pub fn async_with_state<T: 'static, U: 'static, F: FnOnce(Future<T, U>) + Send + 'static>(job: F, shared_state: U) -> Future<T, U> {
 	use std::clone::Clone;
 	
 	// Create future and spawn job
-	let future = Future::new(shared_state);
+	let future = Future::with_state(shared_state);
 	let _future = future.clone();
 	std::thread::spawn(move || job(_future));
 	
 	future
 }
+
+/// Creates a future for `job` and runs `job`. The result of `job` will be set as result into the
+/// future. The parameter passed to `job` is a function that returns if the future is still waiting
+/// so that `job` can check for cancellation.
+pub fn async<T: 'static, F: FnOnce(Future<T, ()>) + Send + 'static>(job: F) -> Future<T, ()> {
+	async_with_state(job, ())
+}
+
+
 
 /// Sets `$result` as the `$future`'s result and returns
 #[macro_export]
@@ -210,25 +226,25 @@ macro_rules! job_die {
 #[cfg(test)]
 mod test {
 	use std;
-	use super::{ Future, State, run_job, Void };
+	use super::{ Future, State, async };
 	
 	#[test]
 	fn double_set_err() {
-		let fut = Future::<u8, Void>::new(Void);
+		let fut = Future::<u8>::new();
 		fut.set(7).unwrap();
 		assert_eq!(fut.set(77).unwrap_err().kind, State::Ready)
 	}
 	
 	#[test]
 	fn cancel_set_err() {
-		let fut = Future::<u8, Void>::new(Void);
+		let fut = Future::<u8>::new();
 		fut.cancel();
 		assert_eq!(fut.set(7).unwrap_err().kind, State::Canceled)
 	}
 	
 	#[test]
 	fn drop_is_canceled() {
-		let fut = Future::<u8, Void>::new(Void);
+		let fut = Future::<u8>::new();
 		assert_eq!(fut.get_state(), State::Waiting);
 		{
 			let _fut = fut.clone();
@@ -239,19 +255,19 @@ mod test {
 	
 	#[test]
 	fn cancel_get_err() {
-		let fut = run_job(|fut: Future<u8, Void>| {
+		let fut = async(|fut: Future<u8>| {
 			std::thread::sleep(std::time::Duration::from_secs(4));
 			job_die!(fut)
-		}, Void);
+		});
 		assert_eq!(fut.get().unwrap_err().kind, State::Canceled)
 	}
 	
 	#[test]
 	fn is_ready_and_get() {
-		let fut = run_job(|fut: Future<u8, Void>| {
+		let fut = async(|fut: Future<u8>| {
 			std::thread::sleep(std::time::Duration::from_secs(4));
 			fut.set(7).unwrap();
-		}, Void);
+		});
 		assert_eq!(fut.get_state(), State::Waiting);
 		
 		// Create and drop future
