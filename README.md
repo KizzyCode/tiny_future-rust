@@ -1,7 +1,8 @@
-[![License](https://img.shields.io/badge/License-BSD%202--Clause-blue.svg)](https://opensource.org/licenses/BSD-2-Clause)
+[![License](https://img.shields.io/badge/License-BSD--2--Clause-blue.svg)](https://opensource.org/licenses/BSD-2-Clause)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 # About
-This library provides spin-loop-free futures and a `run_job`-function to run a job asynchronously.
+This library provides spin-loop-free futures and a helper functions to run a job asynchronously.
  
 # Build Library and Documentation
 To build and open the documentation, go into the projects root-directory and run `cargo doc --open`.

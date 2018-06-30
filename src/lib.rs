@@ -2,12 +2,8 @@
 use etrace::Error;
 
 
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum State {
-	Waiting, Ready, Consumed, Canceled
-}
-
+pub enum State{ Waiting, Ready, Consumed, Canceled }
 
 
 /// The futures inner state
@@ -132,7 +128,6 @@ impl<T, U> Future<T, U> {
 	pub fn detach(&self) {
 		self.0.cancel_on_drop.store(false, std::sync::atomic::Ordering::Relaxed)
 	}
-	
 	
 	
 	/// Internal helper to validate/update the future's state and get the payload
