@@ -1,6 +1,6 @@
 [package]
 name = "tiny_future"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["KizzyCode Software Labs./Keziah Biermann <development@kizzycode.de>"]
 description = "This library provides spin-loop-free futures and a helper functions to run a job asynchronously"
 license = "BSD-2-Clause OR MIT"
@@ -8,4 +8,4 @@ repository = "https://github.com/KizzyCode/tiny_future"
 readme = "README.md"
 
 [dependencies]
-etrace = "0.2.8"
+etrace = "1.0.0"

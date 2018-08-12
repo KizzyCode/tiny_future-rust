@@ -1,5 +1,4 @@
-.DS_Store
 .idea/
 Cargo.lock
-future.iml
+tiny_future.iml
 target/
