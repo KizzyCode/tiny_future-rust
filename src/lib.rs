@@ -162,7 +162,7 @@ impl<T, U> Clone for Future<T, U> {
 		Future(self.0.clone())
 	}
 }
-unsafe impl<T, U> Send for Future<T, U> {}
+unsafe impl<T: Send, U: Send> Send for Future<T, U> {}
 unsafe impl<T, U> Sync for Future<T, U> {}
 
 
