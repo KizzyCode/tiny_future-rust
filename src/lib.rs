@@ -178,7 +178,7 @@ pub fn time_remaining(timeout_point: std::time::Instant) -> std::time::Duration 
 /// Creates a future for `job` and runs `job`. The result of `job` will be set as result into the
 /// future. The parameter passed to `job` is a function that returns if the future is still waiting
 /// so that `job` can check for cancellation.
-pub fn async_with_state<T: 'static, U: 'static, F: FnOnce(Future<T, U>) + Send + 'static>(job: F, shared_state: U) -> Future<T, U> {
+pub fn async_with_state<T: 'static + Send, U: 'static + Send, F: FnOnce(Future<T, U>) + Send + 'static>(job: F, shared_state: U) -> Future<T, U> {
 	use std::clone::Clone;
 	
 	// Create future and spawn job
@@ -192,7 +192,7 @@ pub fn async_with_state<T: 'static, U: 'static, F: FnOnce(Future<T, U>) + Send +
 /// Creates a future for `job` and runs `job`. The result of `job` will be set as result into the
 /// future. The parameter passed to `job` is a function that returns if the future is still waiting
 /// so that `job` can check for cancellation.
-pub fn async<T: 'static, F: FnOnce(Future<T, ()>) + Send + 'static>(job: F) -> Future<T, ()> {
+pub fn async<T: 'static + Send, F: FnOnce(Future<T, ()>) + Send + 'static>(job: F) -> Future<T, ()> {
 	async_with_state(job, ())
 }
 
