@@ -1,4 +1,4 @@
-Copyright (c) 2020, Keziah Biermann
+Copyright (c) 2022, Keziah Biermann
 
 All rights reserved.
 

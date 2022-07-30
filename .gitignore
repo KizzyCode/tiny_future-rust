@@ -1,5 +1,14 @@
+# Ignore .DS_Store
 .DS_Store
-.idea/
-Cargo.lock
-tiny_future.iml
-target/
+
+# Ignore build results
+/Cargo.lock
+/target
+
+# Ignore some vscode files
+.vscode/*
+!.vscode/*.md
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+!.vscode/settings.json
