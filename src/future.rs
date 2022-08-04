@@ -6,7 +6,7 @@ use std::{
         atomic::{AtomicBool, Ordering::SeqCst},
         Arc, Condvar, Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// The inner state of the future
@@ -108,37 +108,26 @@ impl<T> Getter<T> {
     /// if the future has been cancelled
     pub fn wait(self) -> Option<T> {
         // Wait for the future if necessary
-        let mut result = self.future.result.lock().expect("The future is poisoned?!");
-        while result.is_none() && !self.is_cancelled() {
-            // Wait until we are signalled again
-            result = self.future.signal.wait(result).expect("The future is poisoned?!");
-        }
+        let cond = |result: &mut Option<T>| result.is_none() && !self.is_cancelled();
+        let result = self.future.result.lock().expect("The future is poisoned?!");
+        let mut result = self.future.signal.wait_while(result, cond).expect("The future is poisoned?!");
 
         // Claim the result
         result.take()
     }
     /// Waits until a result is available or the timeout is reached
     pub fn wait_timeout(self, timeout: Duration) -> Result<Option<T>, Self> {
-        // Compute an absolute deadline from the timeout
-        let deadline = Instant::now() + timeout;
-
-        // Wait for the future if necessary
-        let mut result = self.future.result.lock().expect("The future is poisoned?!");
-        while result.is_none() && !self.is_cancelled() {
-            // Compute the remaining time and wait until the timeout is reached or we are signalled
-            let remaining = deadline.checked_duration_since(Instant::now()).unwrap_or_default();
-            let (lock_result, timeout_result) =
-                self.future.signal.wait_timeout(result, remaining).expect("The future is poisoned?!");
-
-            // Check if the timeout has been reached
-            result = lock_result;
-            if timeout_result.timed_out() {
-                drop(result);
-                return Err(self);
-            }
-        }
+        // Wait while the queue is empty and not cancelled and the timeout is not reached
+        let cond = |queue: &mut Option<T>| queue.is_none() && !self.is_cancelled();
+        let result = self.future.result.lock().expect("The future is poisoned?!");
+        let (mut result, timeout_result) =
+            self.future.signal.wait_timeout_while(result, timeout, cond).expect("The future is poisoned?!");
 
         // Claim the result
+        if timeout_result.timed_out() {
+            drop(result);
+            return Err(self);
+        }
         Ok(result.take())
     }
 }

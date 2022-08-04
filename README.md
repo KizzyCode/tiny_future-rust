@@ -4,7 +4,7 @@
 [![docs.rs](https://docs.rs/tiny_future/badge.svg)](https://docs.rs/tiny_future)
 [![crates.io](https://img.shields.io/crates/v/tiny_future.svg)](https://crates.io/crates/tiny_future)
 [![Download numbers](https://img.shields.io/crates/d/tiny_future.svg)](https://crates.io/crates/tiny_future)
-[![dependency status](https://deps.rs/crate/tiny_future/0.5.0/status.svg)](https://deps.rs/crate/tiny_future/0.5.0)
+[![dependency status](https://deps.rs/crate/tiny_future/0.5.1/status.svg)](https://deps.rs/crate/tiny_future/0.5.1)
 
 # `tiny_future`
 Welcome to `tiny_future` 🎉
